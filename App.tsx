@@ -1,117 +1,140 @@
-/**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
- */
-
-import React from 'react';
-import type {PropsWithChildren} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {
+  ActivityIndicator,
+  Image,
   SafeAreaView,
-  ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
-  useColorScheme,
+  TouchableOpacity,
   View,
 } from 'react-native';
+import {Camera, useCameraDevice} from 'react-native-vision-camera';
 
-import {
-  Colors,
-  DebugInstructions,
-  Header,
-  LearnMoreLinks,
-  ReloadInstructions,
-} from 'react-native/Libraries/NewAppScreen';
+function App() {
+  const device = useCameraDevice('back');
+  const camera = useRef(null);
+  const [imageData, setImageData] = useState('');
+  const [isCameraActive, setIsCameraActive] = useState(false);
 
-type SectionProps = PropsWithChildren<{
-  title: string;
-}>;
+  useEffect(() => {
+    checkPermissions();
+  }, []);
 
-function Section({children, title}: SectionProps): React.JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
-  return (
-    <View style={styles.sectionContainer}>
-      <Text
-        style={[
-          styles.sectionTitle,
-          {
-            color: isDarkMode ? Colors.white : Colors.black,
-          },
-        ]}>
-        {title}
-      </Text>
-      <Text
-        style={[
-          styles.sectionDescription,
-          {
-            color: isDarkMode ? Colors.light : Colors.dark,
-          },
-        ]}>
-        {children}
-      </Text>
-    </View>
-  );
-}
+  const checkPermissions = async () => {
+    const cameraPermission = await Camera.requestCameraPermission();
+    const microphonePermission = await Camera.requestMicrophonePermission();
 
-function App(): React.JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
-
-  const backgroundStyle = {
-    backgroundColor: isDarkMode ? Colors.darker : Colors.lighter,
+    console.log('Camera Permission:', cameraPermission);
+    console.log('Microphone Permission:', microphonePermission);
   };
 
-  return (
-    <SafeAreaView style={backgroundStyle}>
-      <StatusBar
-        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
-        backgroundColor={backgroundStyle.backgroundColor}
+  const takePicture = async () => {
+    if (camera.current) {
+      const photo = await camera.current.takePhoto();
+      setImageData(photo.path);
+      setIsCameraActive(false);
+      console.log('Photo Path:', photo.path);
+    }
+  };
+
+  if (!device) {
+    return (
+      <ActivityIndicator
+        style={styles.loadingIndicator}
+        size="large"
+        color="#FF0037"
       />
-      <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        style={backgroundStyle}>
-        <Header />
-        <View
-          style={{
-            backgroundColor: isDarkMode ? Colors.black : Colors.white,
-          }}>
-          <Section title="Step One">
-            Edit <Text style={styles.highlight}>App.tsx</Text> to change this
-            screen and then come back to see your edits.
-          </Section>
-          <Section title="See Your Changes">
-            <ReloadInstructions />
-          </Section>
-          <Section title="Debug">
-            <DebugInstructions />
-          </Section>
-          <Section title="Learn More">
-            Read the docs to discover what to do next:
-          </Section>
-          <LearnMoreLinks />
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
+      {isCameraActive ? (
+        <View style={styles.cameraContainer}>
+          <Camera
+            ref={camera}
+            style={StyleSheet.absoluteFill}
+            device={device}
+            isActive={true}
+            photo={true}
+          />
+          <TouchableOpacity
+            style={styles.captureButton}
+            onPress={takePicture}
+          />
         </View>
-      </ScrollView>
+      ) : (
+        <View style={styles.previewContainer}>
+          {imageData ? (
+            <Image
+              source={{uri: `file://${imageData}`}}
+              style={styles.previewImage}
+            />
+          ) : (
+            <Text style={styles.noImageText}>No Image Captured</Text>
+          )}
+          <TouchableOpacity
+            style={styles.photoButton}
+            onPress={() => setIsCameraActive(true)}>
+            <Text style={styles.photoButtonText}>Click Photo</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  sectionContainer: {
-    marginTop: 32,
-    paddingHorizontal: 24,
+  container: {
+    flex: 1,
+    backgroundColor: '#f8f9fa',
   },
-  sectionTitle: {
-    fontSize: 24,
-    fontWeight: '600',
+  loadingIndicator: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  sectionDescription: {
-    marginTop: 8,
-    fontSize: 18,
-    fontWeight: '400',
+  cameraContainer: {
+    flex: 1,
   },
-  highlight: {
-    fontWeight: '700',
+  captureButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#FF0037',
+    position: 'absolute',
+    bottom: 50,
+    alignSelf: 'center',
+  },
+  previewContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewImage: {
+    width: '90%',
+    height: 200,
+    borderRadius: 10,
+    marginBottom: 20,
+  },
+  noImageText: {
+    fontSize: 16,
+    color: '#666',
+    marginBottom: 20,
+  },
+  photoButton: {
+    width: '90%',
+    height: 50,
+    borderWidth: 1,
+    borderColor: '#4c669f',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 10,
+  },
+  photoButtonText: {
+    fontSize: 16,
+    color: '#4c669f',
+    fontWeight: 'bold',
   },
 });
 
