@@ -1,8 +1,10 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -10,40 +12,80 @@ import {
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import {Camera, useCameraDevice} from 'react-native-vision-camera';
+import RNFS from 'react-native-fs'; // Library to read file as base64
 
 function App() {
   const device = useCameraDevice('back');
   const camera = useRef(null);
   const [imageData, setImageData] = useState('');
-  console.log('🚀 Image ------ > ', imageData);
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [analysisData, setAnalysisData] = useState(null);
 
   useEffect(() => {
     checkPermissions();
   }, []);
 
+  // Permission checking function
   const checkPermissions = async () => {
     const cameraPermission = await Camera.requestCameraPermission();
     const microphonePermission = await Camera.requestMicrophonePermission();
-    console.log('Camera Permission:', cameraPermission);
-    console.log('Microphone Permission:', microphonePermission);
+    if (cameraPermission !== 'granted' || microphonePermission !== 'granted') {
+      Alert.alert(
+        'Permissions Required',
+        'Camera and Microphone permissions are required to use this app.',
+      );
+    }
   };
 
+  // Function to capture the image
   const takePicture = async () => {
-    if (camera.current) {
-      // @ts-ignore
-      const photo = await camera.current.takePhoto();
+    try {
+      if (camera.current) {
+        const photo = await camera.current.takePhoto();
+        const base64Image = await RNFS.readFile(photo.path, 'base64');
+        setImageData(`data:image/jpeg;base64,${base64Image}`);
+        setIsCameraActive(false);
+        uploadImage(base64Image);
+      }
+    } catch (error) {
+      console.error('Error capturing photo:', error);
+      Alert.alert('Error', 'Failed to capture image. Please try again.');
+    }
+  };
 
-      setImageData(photo.path);
+  // Function to upload the captured image to the backend
+  const uploadImage = async base64Image => {
+    setLoading(true);
+    setAnalysisData(null); // Clear previous analysis data
+    try {
+      const response = await fetch(
+        'https://medalyzer-backend.onrender.com/api/v1/analyze-image',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            image_data: `data:image/jpeg;base64,${base64Image}`,
+            is_url: false,
+          }),
+        },
+      );
 
-      // Create a FormData object to send the image file
-      const formData = new FormData();
-      formData.append('file', {
-        uri: `file://${photo.path}`, // Ensure correct file URI for Android/iOS
-        name: 'captured_image.jpg', // File name
-        type: 'image/jpeg', // MIME type
-      });
-      setIsCameraActive(false);
+      const result = await response.json();
+      setLoading(false);
+
+      if (response.ok) {
+        setAnalysisData(result);
+      } else {
+        console.error('Server Error:', result);
+        Alert.alert('Error', 'Failed to analyze the image.');
+      }
+    } catch (error) {
+      setLoading(false);
+      console.error('Network Error:', error);
+      Alert.alert('Error', 'Network error. Please try again.');
     }
   };
 
@@ -57,23 +99,125 @@ function App() {
     );
   }
 
+  // Helper function to apply regex formatting
+  const formatText = text => {
+    if (!text) return null;
+
+    // Split into bullet points if it starts with asterisks or numbers
+    const bulletRegex = /(^|\n)[*-]\s(.+?)(?=\n|$)/g;
+    const matches = text.match(bulletRegex);
+
+    if (matches) {
+      return (
+        <View>
+          {matches.map((match, idx) => (
+            <Text key={idx} style={styles.bulletPoint}>
+              • {match.replace(/(^[-*]\s)/, '')}
+            </Text>
+          ))}
+        </View>
+      );
+    }
+
+    // If no bullet points, render plain paragraphs
+    return text.split('\n').map((line, idx) => (
+      <Text key={idx} style={styles.paragraph}>
+        {line.trim()}
+      </Text>
+    ));
+  };
+
+  const renderAnalysisData = () => {
+    if (!analysisData) return null;
+
+    const {groq_analysis, crew_analysis} = analysisData;
+
+    return (
+      <ScrollView style={styles.resultContainer}>
+        {/* Groq Analysis */}
+        <Text style={styles.sectionTitle}>Groq Analysis</Text>
+        <Text style={styles.resultText}>
+          {groq_analysis?.choices[0]?.message?.content}
+        </Text>
+
+        {/* Crew Analysis
+        <Text style={styles.sectionTitle}>Crew Analysis</Text>
+        <Text style={styles.resultText}>{crew_analysis?.raw}</Text> */}
+
+        {/* Crew Analysis */}
+        <Text style={styles.sectionTitle}>Crew Analysis</Text>
+        {crew_analysis?.tasks_output
+          ?.filter((task: any) => task.name !== 'health_research_task')
+          ?.map((task: any, index: any) => {
+            // Mapping task names to beautiful titles
+            const taskNameMapping = {
+              // health_research_task: 'In-Depth Health Research',
+              diagnostic_analysis_task: 'Diagnostic Image Analysis',
+              treatment_advice_task: 'Treatment Options and Costs',
+              doctor_recommendation_task: 'Doctor Recommendations',
+            };
+
+            // Get the beautiful title or fallback to the original task name
+            const beautifulTaskName = taskNameMapping[task.name] || task.name;
+
+            return (
+              <View key={index} style={styles.taskContainer}>
+                <Text style={styles.taskTitle}>{beautifulTaskName}</Text>
+                <Text style={styles.taskDescription}>
+                  <Text style={styles.boldText}>Description: </Text>
+                  {task.description}
+                  {/* {formatText(task.description)} */}
+                </Text>
+                {task.summary && (
+                  <Text style={styles.taskSummary}>
+                    <Text style={styles.boldText}>Summary: </Text>
+                    {task.summary}
+                    {/* {formatText(task.summary)} */}
+                  </Text>
+                )}
+                {task.raw && (
+                  <Text style={styles.taskRaw}>
+                    <Text style={styles.boldText}>Details: </Text>
+                    {task.raw}
+                    {/* {formatText(task.raw)} */}
+                  </Text>
+                )}
+              </View>
+            );
+          })}
+
+        {/* Task Outputs */}
+        {/* <Text style={styles.sectionTitle}>Tasks Output</Text> */}
+        {/* {crew_analysis?.tasks_output?.map((task, index) => (
+          <View key={index} style={styles.taskContainer}>
+            <Text style={styles.taskTitle}>{task.name}</Text>
+            <Text style={styles.taskDescription}>{task.description}</Text>
+            <Text style={styles.taskSummary}>{task.summary}</Text>
+          </View>
+        ))} */}
+      </ScrollView>
+    );
+  };
+
+  const renderLoadingScreen = () => (
+    <View style={styles.loadingScreen}>
+      <ActivityIndicator size="large" color="#00AEEF" />
+      <Text style={styles.loadingText}>
+        Analyzing your image, please wait...
+      </Text>
+      <Text style={styles.loadingSubtitle}>
+        Stay tuned as we process and generate insights for you!
+      </Text>
+    </View>
+  );
+
   return (
     <LinearGradient colors={['#003973', '#E5E5BE']} style={styles.gradient}>
       <SafeAreaView style={styles.container}>
-        {!isCameraActive && (
-          <>
-            <View style={styles.header}>
-              <Text style={styles.title}>Health Analyzer</Text>
-              <Text style={styles.subtitle}>
-                Capture and analyze health data effortlessly
-              </Text>
-            </View>
-          </>
-        )}
-
-        {isCameraActive ? (
+        {loading ? (
+          renderLoadingScreen()
+        ) : isCameraActive ? (
           <View style={styles.cameraContainer}>
-            {/* Back Button */}
             <TouchableOpacity
               style={styles.backButton}
               onPress={() => setIsCameraActive(false)}>
@@ -93,12 +237,15 @@ function App() {
             </TouchableOpacity>
           </View>
         ) : (
-          <View style={styles.previewContainer}>
+          <ScrollView contentContainerStyle={styles.scrollView}>
+            <View style={styles.header}>
+              <Text style={styles.title}>Health Analyzer</Text>
+              <Text style={styles.subtitle}>
+                Capture and analyze health data effortlessly
+              </Text>
+            </View>
             {imageData ? (
-              <Image
-                source={{uri: `file://${imageData}`}}
-                style={styles.previewImage}
-              />
+              <Image source={{uri: imageData}} style={styles.previewImage} />
             ) : (
               <Text style={styles.noImageText}>No Image Captured</Text>
             )}
@@ -107,7 +254,8 @@ function App() {
               onPress={() => setIsCameraActive(true)}>
               <Text style={styles.photoButtonText}>Open Camera</Text>
             </TouchableOpacity>
-          </View>
+            {renderAnalysisData()}
+          </ScrollView>
         )}
       </SafeAreaView>
     </LinearGradient>
@@ -120,14 +268,14 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    justifyContent: 'center',
+  },
+  scrollView: {
     alignItems: 'center',
-    // paddingHorizontal: 20,
+    padding: 20,
   },
   header: {
     marginBottom: 20,
     alignItems: 'center',
-    paddingTop: 90,
   },
   title: {
     fontSize: 28,
@@ -140,17 +288,11 @@ const styles = StyleSheet.create({
     color: '#f0f0f0',
     textAlign: 'center',
   },
-  loadingIndicator: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   cameraContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     width: '100%',
-    position: 'relative',
   },
   captureButton: {
     position: 'absolute',
@@ -159,10 +301,6 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 20,
     borderRadius: 25,
-    shadowColor: '#000',
-    shadowOpacity: 0.4,
-    shadowOffset: {width: 0, height: 3},
-    shadowRadius: 6,
     elevation: 6,
   },
   captureButtonText: {
@@ -170,26 +308,15 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  previewContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    width: '100%',
-  },
   previewImage: {
     width: '90%',
     height: 250,
     borderRadius: 15,
     marginBottom: 20,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowOffset: {width: 0, height: 2},
-    shadowRadius: 5,
     elevation: 4,
   },
   noImageText: {
     fontSize: 18,
-    // color: '#4A4A4A',
     color: '#fff',
     marginBottom: 20,
   },
@@ -198,16 +325,68 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 30,
     borderRadius: 30,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowOffset: {width: 0, height: 3},
-    shadowRadius: 4,
     elevation: 5,
+    marginBottom: 20,
   },
   photoButtonText: {
     fontSize: 16,
     color: '#FFFFFF',
     fontWeight: '600',
+  },
+  loadingScreen: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 20,
+    color: '#FFFFFF',
+    marginTop: 20,
+    fontWeight: 'bold',
+  },
+  loadingSubtitle: {
+    fontSize: 16,
+    color: '#D3D3D3',
+    marginTop: 10,
+    textAlign: 'center',
+  },
+  resultContainer: {
+    marginTop: 20,
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 10,
+    width: '100%',
+    elevation: 3,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    color: '#003973',
+  },
+  resultText: {
+    fontSize: 16,
+    color: '#555',
+    marginBottom: 15,
+  },
+  taskContainer: {
+    marginBottom: 10,
+  },
+  taskTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FF5722',
+    marginBottom: 10, // Added space between paragraphs
+  },
+  taskDescription: {
+    fontSize: 14,
+    color: '#333',
+    marginBottom: 10, // Added space between paragraphs
+  },
+  taskSummary: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 10, // Added space between paragraphs
   },
   backButton: {
     position: 'absolute',
@@ -217,43 +396,40 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 15,
     borderRadius: 20,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowOffset: {width: 0, height: 3},
-    shadowRadius: 4,
     elevation: 5,
-    zIndex: 10,
   },
   backButtonText: {
     color: '#FF5722',
     fontSize: 14,
     fontWeight: 'bold',
   },
-  imageWrapper: {
-    position: 'relative',
-    width: '90%',
-    height: 250,
+  loadingIndicator: {
+    marginVertical: 20, // Added style for the ActivityIndicator
   },
-  deleteIconContainer: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    backgroundColor: '#FF0000',
-    borderRadius: 15,
-    width: 30,
-    height: 30,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.3,
-    shadowOffset: {width: 0, height: 2},
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  deleteIconText: {
-    color: '#FFFFFF',
-    fontSize: 18,
+  boldText: {
     fontWeight: 'bold',
+    // fontSize: 14,
+    // color: '#555',
+    // padding: 10,
+    fontSize: 16,
+    color: '#555',
+  },
+  taskRaw: {
+    fontSize: 14,
+    color: '#777',
+    marginBottom: 10, // Added space between paragraphs
+  },
+
+  bulletPoint: {
+    fontSize: 14,
+    color: '#555',
+    marginLeft: 10,
+    marginVertical: 5, // Added space between bullet points
+  },
+  paragraph: {
+    fontSize: 14,
+    color: '#555',
+    marginBottom: 10, // Added space between paragraphs
   },
 });
 
